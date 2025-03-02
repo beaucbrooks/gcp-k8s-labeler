@@ -6,6 +6,7 @@ if(Test-Path "$PSScriptRoot/.env") {
         Set-Item -Path "env:$key" -Value $value
     }
 }
+$env:Path += ";$env:USERPROFILE\.kube" # expecting kubectl to either be here, or in your path
 $credentialsPath = $env:GOOGLE_APPLICATION_CREDENTIALS
 $projectId = Get-Content $credentialsPath | ConvertFrom-Json | Select-Object -ExpandProperty project_id
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -77,6 +78,46 @@ function Connect-GCP {
         Write-Log "Failed to login to GCP: $_" -Level "ERROR"
         exit 1
     }
+}
+
+function Get-ClusterContexts {
+    return kubectl config get-contexts --output=name
+}
+
+function Get-NamespacesWithLabels {
+    param (
+        [string]$context
+    )
+
+    Write-Host "Fetching namespaces for cluster: $context"
+
+    # Switch context
+    kubectl config use-context $context | Out-Null
+
+    # Get namespaces with labels
+    $namespaces = kubectl get namespaces -o json | ConvertFrom-Json
+
+    $namespaceList = @()
+    foreach ($ns in $namespaces.items) {
+        $namespaceList += [PSCustomObject]@{
+            Cluster   = $context
+            Namespace = $ns.metadata.name
+            Labels    = ($ns.metadata.labels | ConvertTo-Json -Compress)
+        }
+    }
+    Write-Log "Namespace List: $namespaceList for cluster: $context"
+    return $namespaceList
+}
+
+function Get-AllNamespacesWithLabels {
+    $contexts = Get-ClusterContexts
+    $allNamespaces = @()
+
+    foreach ($context in $contexts) {
+        $allNamespaces += Get-NamespacesWithLabels -context $context
+    }
+
+    return $allNamespaces
 }
 
 function Get-ClusterInfo {
@@ -161,4 +202,5 @@ function Write-Summary {
 
 Connect-GCP
 Get-ClusterInfo
+Get-AllNamespacesWithLabels
 Write-Summary
