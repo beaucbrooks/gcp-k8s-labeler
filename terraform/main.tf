@@ -3,6 +3,7 @@ resource "google_container_cluster" "primary" {
   location           = var.region
   enable_autopilot   = true # Enables GKE Autopilot mode
   initial_node_count = 1
+  deletion_protection = false
 
   # Make the cluster public
   private_cluster_config {
@@ -18,8 +19,15 @@ resource "google_container_cluster" "primary" {
   }
 
   node_config {
-    machine_type = "e2-medium"
-    disk_size_gb = 40
+    machine_type = "e2-small"
+    disk_size_gb = 100
+    reservation_affinity {
+      consume_reservation_type = "NO_RESERVATION"
+    }
+
+    gvnic {
+      enabled = true
+    }
 
     tags = var.node_tags
   }
@@ -28,6 +36,39 @@ resource "google_container_cluster" "primary" {
   network    = data.google_compute_network.vpc_network.name
   subnetwork = data.google_compute_subnetwork.gke_subnet.name
 }
+
+resource "google_container_cluster" "secondary" {
+  name               = "${var.cluster_name}-secondary"
+  location           = var.region
+  enable_autopilot   = true # Enables GKE Autopilot mode
+  initial_node_count = 1
+  deletion_protection = false
+
+  # Make the cluster public
+  private_cluster_config {
+    enable_private_nodes    = false
+    enable_private_endpoint = false
+  }
+
+  master_authorized_networks_config {
+    cidr_blocks {
+      cidr_block   = var.allowed_ip
+      display_name = "Allowed IP"
+    }
+  }
+
+  node_config {
+    machine_type = "e2-small"
+    disk_size_gb = 100
+
+    tags = var.node_tags
+  }
+
+  # Optional network settings
+  network    = data.google_compute_network.vpc_network.name
+  subnetwork = data.google_compute_subnetwork.gke_subnet.name
+}
+
 
 resource "google_compute_firewall" "k8s_firewall" {
   name    = "k8s-cluster-firewall"
