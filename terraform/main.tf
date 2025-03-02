@@ -2,12 +2,19 @@ resource "google_container_cluster" "primary" {
   name               = var.cluster_name
   location           = var.region
   enable_autopilot   = true # Enables GKE Autopilot mode
-  initial_node_count = 3
+  initial_node_count = 1
 
   # Make the cluster public
   private_cluster_config {
     enable_private_nodes    = false
     enable_private_endpoint = false
+  }
+
+  master_authorized_networks_config {
+    cidr_blocks {
+      cidr_block   = var.allowed_ip
+      display_name = "Allowed IP"
+    }
   }
 
   node_config {
