@@ -14,9 +14,9 @@ $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logFile = "$PSScriptRoot\gke_cluster_export_$timestamp.log"
 $csvOutputPath = "$PSScriptRoot\gke_cluster_labels_$timestamp.csv"
 $missingConfigs = @()
-$totalClusters = 0
-$successfulExports = 0
-$failedExports = 0
+$global:TOTAL_CLUSTERS = 0
+$global:SUCCESSFUL_EXPORTS = 0
+$global:FAILED_EXPORTS = 0
 
 function Connect-GCP {
     try {
@@ -32,7 +32,14 @@ function Connect-GCP {
 }
 
 function Get-ClusterContexts {
-    return kubectl config get-contexts --output=name
+    Write-Log "Getting all cluster contexts"
+    try {
+        return kubectl config get-contexts --output=name     
+    }
+    catch {
+        Write-Log "Failed to get cluster contexts: $_" -Level "ERROR"
+        exit 1
+    }    
 }
 
 function Get-NamespacesWithLabels {
@@ -129,22 +136,15 @@ function Get-ClusterInfo {
         # Get GKE clusters
         Write-Log "Getting GKE clusters in project $projectId"
         $clusters = gcloud container clusters list --format="json" | ConvertFrom-Json
-        
         if ($clusters) {
             Write-Log "Found $($clusters.Count) GKE clusters in project $projectId"
-            
             foreach ($cluster in $clusters) {
-                $totalClusters++
+                $global:TOTAL_CLUSTERS++
                 $clusterName = $cluster.name
                 $location = $cluster.location
-                
                 try {
                     Write-Log "Processing cluster: $clusterName in $location"
-                    
-                    # Get detailed cluster information
                     $clusterDetail = gcloud container clusters describe $clusterName --region=$location --format="json" | ConvertFrom-Json
-                    
-                    # Create cluster info
                     $clusterInfo = [PSCustomObject]@{
                         project    = $projectId
                         name       = $clusterName
@@ -157,25 +157,24 @@ function Get-ClusterInfo {
                         createdOn  = $clusterDetail.createTime
                         exportedOn = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                     }
-                    
-                    $successfulExports++
+                    $global:SUCCESSFUL_EXPORTS++
                     Write-Log "Successfully analyzed cluster: $clusterName"
                     $clusterInfoResults.Add($clusterInfo)
                 }
                 catch {
                     Write-Log "Failed to analyze cluster $clusterName. Error: $_" -Level "ERROR"
                     $missingConfigs += "$projectId : $clusterName"
-                    $failedExports++
+                    $global:FAILED_EXPORTS++
                 }
             }
         }
         else {
-            Write-Log "No GKE clusters found in project $projectId" -Level "INFO"
+            Write-Log "No clusters found in project $projectId" -Level "INFO"
         }
     }
     catch {
         Write-Log "Failed to process project $projectId. Error: $_" -Level "ERROR"
-        $failedExports++
+        $global:FAILED_EXPORTS++
     }
     return $clusterInfoResults
 }
@@ -210,9 +209,9 @@ function Get-CombinedInformation {
 
 function Write-Summary {
     Write-Log "`n=== EXPORT SUMMARY ===" 
-    Write-Log "Total clusters processed: $totalClusters"
-    Write-Log "Successful exports: $successfulExports"
-    Write-Log "Failed exports: $failedExports"
+    Write-Log "Total clusters processed: $global:TOTAL_CLUSTERS"
+    Write-Log "Successful exports: $global:SUCCESSFUL_EXPORTS"
+    Write-Log "Failed exports: $global:FAILED_EXPORTS"
 
     if ($missingConfigs.Count -gt 0) {
         Write-Log "`n=== FAILED EXPORTS ===" -Level "ERROR"
