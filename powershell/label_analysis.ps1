@@ -1,6 +1,6 @@
 # Put your 'secret' values in a file named .env
 # with the format of KEY=VALUE .NO QUOTES NO SPACES.
-if(Test-Path "$PSScriptRoot/.env") {
+if (Test-Path "$PSScriptRoot/.env") {
     Get-Content "$PSScriptRoot/.env" | ForEach-Object {
         $key, $value = $_ -split '='
         Set-Item -Path "env:$key" -Value $value
@@ -17,53 +17,16 @@ $totalClusters = 0
 $successfulExports = 0
 $failedExports = 0
 
-# Initialize CSV with headers
-$csvHeaders = @(
-    'PROJECT-ID',
-    'CLUSTER-NAME',
-    'LOCATION',
-    'CLUSTER-VERSION',
-    'NODE-COUNT',
-    'STATUS',
-    'NETWORK',
-    'SUBNET',
-    'CREATION-TIMESTAMP',
-    'TOTAL-LABELS',
-    'EXPORT-DATE'
-)
-
-# Create CSV file with headers
-$csvHeaders -join ',' | Out-File -FilePath $csvOutputPath -Encoding UTF8
-
 function Write-Log {
     param($Message, $Level = "INFO")
     $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')|$Level|$Message"
     Add-Content -Path $logFile -Value $logMessage
     if ($Level -eq "ERROR") {
         Write-Error $Message
-    } elseif ($VerbosePreference -eq 'Continue' -or $Level -eq "INFO") {
+    }
+    elseif ($VerbosePreference -eq 'Continue' -or $Level -eq "INFO") {
         Write-Host $logMessage
     }
-}
-
-function Write-ToCSV {
-    param(
-        [Parameter(Mandatory=$true)]
-        [hashtable]$ClusterInfo
-    )
-    
-    # Create array to hold row data in correct order
-    $rowData = @()
-    foreach ($header in $csvHeaders) {
-        $rowData += if ($null -ne $ClusterInfo[$header]) { 
-            "`"$($ClusterInfo[$header])`""
-        } else { 
-            '""'
-        }
-    }
-    
-    # Append row to CSV
-    $rowData -join ',' | Add-Content -Path $csvOutputPath -Encoding UTF8
 }
 
 function Connect-GCP {
@@ -89,23 +52,19 @@ function Get-NamespacesWithLabels {
         [string]$context
     )
 
-    Write-Host "Fetching namespaces for cluster: $context"
-
-    # Switch context
     kubectl config use-context $context | Out-Null
 
-    # Get namespaces with labels
     $namespaces = kubectl get namespaces -o json | ConvertFrom-Json
 
     $namespaceList = @()
     foreach ($ns in $namespaces.items) {
         $namespaceList += [PSCustomObject]@{
-            Cluster   = $context
-            Namespace = $ns.metadata.name
-            Labels    = ($ns.metadata.labels | ConvertTo-Json -Compress)
+            context   = $context
+            cluster   = $context -split '_' | Select-Object -Last 1
+            namespace = $ns.metadata.name
+            labels    = $ns.metadata.labels
         }
     }
-    Write-Log "Namespace List: $namespaceList for cluster: $context"
     return $namespaceList
 }
 
@@ -162,6 +121,7 @@ function Set-LabelForAllNamespaces {
 }
 
 function Get-ClusterInfo {
+    $clusterInfoResults = [System.Collections.Generic.List[PSCustomObject]]::new()
     try {
         # Get GKE clusters
         Write-Log "Getting GKE clusters in project $projectId"
@@ -181,46 +141,68 @@ function Get-ClusterInfo {
                     # Get detailed cluster information
                     $clusterDetail = gcloud container clusters describe $clusterName --region=$location --format="json" | ConvertFrom-Json
                     
-                    # Extract labels
-                    $labels = @{}
-                    if ($clusterDetail.resourceLabels) {
-                        $labels = $clusterDetail.resourceLabels
-                    }
-                    
                     # Create cluster info
-                    $clusterInfo = @{
-                        'PROJECT-ID' = $projectId
-                        'CLUSTER-NAME' = $clusterName
-                        'LOCATION' = $location
-                        'CLUSTER-VERSION' = $clusterDetail.currentMasterVersion
-                        'NODE-COUNT' = $clusterDetail.currentNodeCount
-                        'STATUS' = $clusterDetail.status
-                        'NETWORK' = $clusterDetail.network
-                        'SUBNET' = $clusterDetail.subnetwork
-                        'CREATION-TIMESTAMP' = $clusterDetail.createTime
-                        'TOTAL-LABELS' = $labels.Count
-                        'EXPORT-DATE' = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                    $clusterInfo = [PSCustomObject]@{
+                        project    = $projectId
+                        name       = $clusterName
+                        location   = $location
+                        version    = $clusterDetail.currentMasterVersion
+                        nodeCount  = $clusterDetail.currentNodeCount
+                        status     = $clusterDetail.status
+                        network    = $clusterDetail.network
+                        subnet     = $clusterDetail.subnetwork
+                        createdOn  = $clusterDetail.createTime
+                        exportedOn = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                     }
-                    
-                    # Write to CSV
-                    Write-ToCSV -ClusterInfo $clusterInfo
                     
                     $successfulExports++
                     Write-Log "Successfully analyzed cluster: $clusterName"
-                    
-                } catch {
+                    $clusterInfoResults.Add($clusterInfo)
+                }
+                catch {
                     Write-Log "Failed to analyze cluster $clusterName. Error: $_" -Level "ERROR"
                     $missingConfigs += "$projectId : $clusterName"
                     $failedExports++
                 }
             }
-        } else {
+        }
+        else {
             Write-Log "No GKE clusters found in project $projectId" -Level "INFO"
         }
-    } catch {
+    }
+    catch {
         Write-Log "Failed to process project $projectId. Error: $_" -Level "ERROR"
         $failedExports++
     }
+    return $clusterInfoResults
+}
+
+function Get-CombinedInformation {
+    $combinedInformation = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $clusters = Get-ClusterInfo
+    $labelInformation = Get-AllNamespacesWithLabels
+
+    foreach ($namespace in $labelInformation) {
+        $cluster = $clusters | Where-Object { $namespace.cluster -eq $_.name } | Select-Object -First 1
+        $finalObject = [PSCustomObject]@{
+            name       = $namespace.namespace
+            cluster    = $namespace.cluster
+            labels     = $namespace.labels 
+            context    = $namespace.context
+            project    = $cluster.project 
+            location   = $cluster.location
+            version    = $cluster.version
+            nodeCount  = $cluster.nodeCount
+            status     = $cluster.status
+            network    = $cluster.network
+            subnet     = $cluster.subnet
+            createdOn  = $cluster.createdOn
+            exportedOn = $cluster.exportedOn
+        }
+        $combinedInformation.Add($finalObject)
+    }
+
+    return $combinedInformation
 }
 
 function Write-Summary {
@@ -242,6 +224,5 @@ function Write-Summary {
 }
 
 Connect-GCP
-Get-ClusterInfo
-Get-AllNamespacesWithLabels
+Get-CombinedInformation | Export-Csv -Path $csvOutputPath -NoTypeInformation 
 Write-Summary
