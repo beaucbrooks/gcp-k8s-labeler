@@ -120,6 +120,47 @@ function Get-AllNamespacesWithLabels {
     return $allNamespaces
 }
 
+function Set-NamespaceLabel {
+    param (
+        [string]$context,
+        [string]$namespace,
+        [string]$labelKey,
+        [string]$labelValue
+    )
+
+    Write-Host "Adding label '$labelKey=$labelValue' to namespace '$namespace' in cluster '$context'..."
+
+    kubectl config use-context $context | Out-Null
+
+    $command = "kubectl label namespace $namespace $labelKey=$labelValue --overwrite"
+    Invoke-Expression $command
+
+    Write-Host "Label applied successfully!"
+}
+
+function Set-LabelForAllNamespaces {
+    param (
+        [string]$labelKey,
+        [string]$labelValue
+    )
+
+    $contexts = Get-ClusterContexts
+
+    foreach ($context in $contexts) {
+        Write-Host "Processing cluster: $context"
+        
+        kubectl config use-context $context | Out-Null
+
+        $namespaces = kubectl get namespaces -o json | ConvertFrom-Json
+        foreach ($ns in $namespaces.items) {
+            $namespaceName = $ns.metadata.name
+            Write-Host "Labeling namespace: $namespaceName in cluster: $context"
+
+            Set-NamespaceLabel -context $context -namespace $namespaceName -labelKey $labelKey -labelValue $labelValue
+        }
+    }
+}
+
 function Get-ClusterInfo {
     try {
         # Get GKE clusters
