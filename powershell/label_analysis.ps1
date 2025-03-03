@@ -6,6 +6,7 @@ if (Test-Path "$PSScriptRoot/.env") {
         Set-Item -Path "env:$key" -Value $value
     }
 }
+. "$PSScriptRoot/logging.ps1"
 $env:Path += ";$env:USERPROFILE\.kube" # expecting kubectl to either be here, or in your path
 $credentialsPath = $env:GOOGLE_APPLICATION_CREDENTIALS
 $projectId = Get-Content $credentialsPath | ConvertFrom-Json | Select-Object -ExpandProperty project_id
@@ -17,27 +18,14 @@ $totalClusters = 0
 $successfulExports = 0
 $failedExports = 0
 
-function Write-Log {
-    param($Message, $Level = "INFO")
-    $logMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')|$Level|$Message"
-    Add-Content -Path $logFile -Value $logMessage
-    if ($Level -eq "ERROR") {
-        Write-Error $Message
-    }
-    elseif ($VerbosePreference -eq 'Continue' -or $Level -eq "INFO") {
-        Write-Host $logMessage
-    }
-}
-
 function Connect-GCP {
     try {
-        Write-Log "Attempting GCP login with Service Account"
+        Write-Log "Attempting GCP login with Service Account" 
         gcloud auth activate-service-account --key-file=$credentialsPath
         gcloud config set project $projectId
-        Write-Log "GCP login successful for project: $projectId"
+        Write-Log "GCP login successful for project: $projectId" 
     }
     catch {
-        <#Do this if a terminating exception happens#>
         Write-Log "Failed to login to GCP: $_" -Level "ERROR"
         exit 1
     }
@@ -52,10 +40,24 @@ function Get-NamespacesWithLabels {
         [string]$context
     )
 
-    kubectl config use-context $context | Out-Null
-
-    $namespaces = kubectl get namespaces -o json | ConvertFrom-Json
-
+    Write-Log "Switching context to $context"
+    try {
+        kubectl config use-context $context | Out-Null     
+    }
+    catch {
+        Write-Log "Failed to switch context: $_" -Level "ERROR"
+        return 
+    }
+    
+    Write-Log "Getting all namespaces in context: $context"
+    try {
+        $namespaces = kubectl get namespaces -o json | ConvertFrom-Json 
+    }
+    catch {
+        Write-Log "Failed to get namespaces: $_" -Level "ERROR"
+        return 
+    }
+    
     $namespaceList = @()
     foreach ($ns in $namespaces.items) {
         $namespaceList += [PSCustomObject]@{
@@ -73,6 +75,7 @@ function Get-AllNamespacesWithLabels {
     $allNamespaces = @()
 
     foreach ($context in $contexts) {
+        Write-Log "Getting all namespaces with labels in context: $context"
         $allNamespaces += Get-NamespacesWithLabels -context $context
     }
 
@@ -206,7 +209,7 @@ function Get-CombinedInformation {
 }
 
 function Write-Summary {
-    Write-Log "`n=== EXPORT SUMMARY ===" -Level "WARNING"
+    Write-Log "`n=== EXPORT SUMMARY ===" 
     Write-Log "Total clusters processed: $totalClusters"
     Write-Log "Successful exports: $successfulExports"
     Write-Log "Failed exports: $failedExports"
