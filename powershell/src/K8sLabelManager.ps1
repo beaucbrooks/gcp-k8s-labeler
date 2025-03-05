@@ -1,7 +1,3 @@
-. "$PSScriptRoot/logging.ps1"
-$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$global:LOG_FILE = "$PSScriptRoot\gke_cluster_export_$timestamp.log"
-$global:csvOutputPath = "$PSScriptRoot\gke_cluster_labels_$timestamp.csv"
 $global:MISING_CONFIGS = @()
 $global:PROJECT_ID = Get-Content $env:GOOGLE_APPLICATION_CREDENTIALS | ConvertFrom-Json | Select-Object -ExpandProperty project_id
 $global:TOTAL_CLUSTERS = 0
@@ -10,26 +6,41 @@ $global:FAILED_EXPORTS = 0
 
 # Put your 'secret' values in a file named .env
 # with the format of KEY=VALUE .NO QUOTES NO SPACES.
-if (Test-Path "$PSScriptRoot/.env") {
-    Get-Content "$PSScriptRoot/.env" | ForEach-Object {
-        $key, $value = $_ -split '='
-        Set-Item -Path "env:$key" -Value $value
+function Set-EnvironmentVariables {
+    param(
+        [string]$Path = "$PSScriptRoot/.env"   
+    )
+
+    if (Test-Path "$Path") {
+        Get-Content "$Path" | ForEach-Object {
+            $key, $value = $_ -split '='
+            Set-Item -Path "env:$key" -Value $value
+        }
+    }
+    else {
+        Write-Log "No .env file found, not sure where you're getting your secrets/credentials from. Exiting..." -Level "ERROR"
+        exit 1
     }
 }
-else {
-    Write-Log "No .env file found, not sure where you're getting your secrets/credentials from. Exiting..." -Level "ERROR"
-    exit 1
-}
 
-if (Test-Path "$env:USERPROFILE\.kube") {
-    $env:Path += ";$env:USERPROFILE\.kube"
-}
-else {
-    Write-Log "Kube config not found, without it you will not be able to pull label info. Exiting..." -Level "ERROR"
-    exit 1
+function Set-KubeConfigPath {
+    param(
+        [string]$Path = "$env:USERPROFILE\.kube"
+    )
+
+    if (Test-Path "$env:USERPROFILE\.kube") {
+        $env:Path += ";$env:USERPROFILE\.kube"
+    }
+    else {
+        Write-Log "Kube config not found, without it you will not be able to pull label info. Exiting..." -Level "ERROR"
+        exit 1
+    }
 }
 
 function Connect-GCP {
+    param(
+        [string]$KeyPath = $env:GOOGLE_APPLICATION_CREDENTIALS
+    )
     try {
         Write-Log "Attempting GCP login with Service Account" 
         gcloud auth activate-service-account --key-file=$env:GOOGLE_APPLICATION_CREDENTIALS
@@ -223,6 +234,10 @@ function Get-CombinedInformation {
 }
 
 function Write-Summary {
+    param(
+        [string]$CsvOutputPath,
+        [string]$LogPath
+    )
     Write-Log "`n=== EXPORT SUMMARY ===" 
     Write-Log "Total clusters processed: $global:TOTAL_CLUSTERS"
     Write-Log "Successful exports: $global:SUCCESSFUL_EXPORTS"
@@ -236,10 +251,6 @@ function Write-Summary {
     }
 
     Write-Log "`nCluster analysis complete"
-    Write-Log "Results exported to: $global:csvOutputPath"
-    Write-Log "Full execution log available at: $global:LOG_FILE"
+    Write-Log "Results exported to: $CsvOutputPath"
+    Write-Log "Full execution log available at: $LogPath"
 }
-
-Connect-GCP
-Get-CombinedInformation | Export-Csv -Path $global:csvOutputPath -NoTypeInformation 
-Write-Summary
